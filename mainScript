@@ -1,0 +1,1538 @@
+%% SECTION 1
+
+% Only do this if there isn't a strtuct to keep
+clear all
+close all
+
+% In between animals use this to keep the struct in progress:
+clearvars -except Vgatflp_PVcre_Gtacr
+
+% the 'uigetdir' function calls open a dialog box that allows the user to 
+% select a directory on their file system. 
+% The first argument ('D:\DATA') specifies the default directory that the 
+% dialog box will initially point to. 
+% The second argument ('Select directory with KiloSort results') is a 
+% string that provides a message or instruction to the user, indicating 
+% what they should select. 
+
+% Display some information or instruction
+fprintf("Select directory with the .mat file");
+fileDir = uigetdir('/Users/marisagrams/Library/CloudStorage/Box-Box/UCSF/1. General Yackle/Experiments/2_BHR/1_Final Recordings/','Select directory with the .mat file');
+fprintf("Select directory with matlab scripts/functions");
+codeDir = uigetdir('/Users/marisagrams/Documents/MATLAB/','Select directory with matlab scripts/functions');
+fprintf("Select directory where you would like to save to");
+saveDir = uigetdir('/Users/marisagrams/Library/CloudStorage/Box-Box/UCSF/1. General Yackle/Experiments/DataAnalysis/','Select directory with matlab scripts/functions');
+
+%I think I will want to just save in fileDir
+% saveDir = uigetdir('D:\DATA','Select directory to save analysis restuls');
+
+% Set the current working directory to the following in the ()
+cd(fileDir);
+
+% prior to use export data of interest as MATLAB file from Lab Chart
+%load in the data
+filename = '250806_PVcreVgatflp_Gtacr_5372946_num3_control_PVneg_Vgatpos';
+% This just appends ".mat" to the fileName
+dataFile = strcat (filename,'.mat');
+
+load(dataFile);
+
+% Read in metadata file
+%metaDataFile = strcat(filePath,fileName,'_metadata.xlsx');
+metaDataFile = strcat(filename,'_metadata.xlsx');
+metaData = readtable (metaDataFile);   % Read the Excel file into a table
+
+%% SECTION 2: Establish Struct for variable saving
+
+% Use this to initialize a struct, don't use if one already exists
+Vgatflp_PVcre_Gtacr=[];
+
+% Create the field for the inidividual mouse
+secondfield='Control_PVcreWT_Vgatflp_Gtacr_num3_250806';
+Vgatflp_PVcre_Gtacr.(secondfield)=[];
+
+mouse_ID='Control PVcreWT Vgatflp Gtacr num3 rec250806';
+
+%% SECTION 3: convert the time column so it matches the time measurement of the .mat recording file
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Use this one if I pre-formatted the time column to avoid using apostrophe in
+%front everytime
+%
+% Convert the time column back into HH:MM:SS.
+% It automatically gets read as decimal time for some reason
+metaData.Time = datetime(metaData.Time, 'ConvertFrom','datenum', 'Format','HH:mm:ss');
+
+%transform hh:mm:ss times into msec in a new column to get away from the
+%datenum format of the original column
+for i = 1:size(metaData.Time)
+    xx = hour(metaData.Time(i));
+    yy = minute(metaData.Time(i));
+    zz = second(metaData.Time(i));
+    ms =((xx * (3.6e+6)) + (yy * 60000) + (zz * 1000));
+    metaData.Millisec(i) = ms;
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Use this one if used apostrophe in front everytime
+%
+%transform h:mm:ss times into sec
+for i = 1:size(metaData.Time)
+    hr = str2double(metaData.Time{i,1}([1]));  
+    minute = str2double(metaData.Time{i,1}([3,4]));
+    sec = str2double(metaData.Time{i,1}([6,7]));
+    ms=((hr * (3.6e+6)) + (minute * 60000) + (sec * 1000));
+    metaData.OldTime{i} = metaData.Time{i};
+    metaData.Time{i} = ms;
+end
+
+%% SECTION 4: Set the cd back to the matlab folder
+% Set the current working directory to the following in the ()
+cd(codeDir);
+
+%% SECTION 5: extract individual channels
+% Datastart and dataend are the values associated with the start and end of 
+% all channels, so datastart[1;646201] and dataend[6436200;12872400] means
+% there is two channels. Channel 1 spans from 1:6436200 and Channel 2 spans
+% from 646201: 12872400
+
+% Using these boundary values, we can split the 1 row of data into two
+% rows, 1 for each channel, in channelData
+
+% This will indicate how many channels to assign
+numChannels = size(datastart,1);
+
+% This will indicate if a stop+start occured during the recording 
+% Will be shown by greater than just 1 column
+numColumns = size(datastart,2);
+
+
+% Default will be if there is hopefully just one column, but can change to
+% other recording sections if needed
+recordingSect=1;
+for chan = 1:numChannels
+    channelData(chan,:) = data(datastart(chan,recordingSect):dataend(chan,recordingSect));
+end
+
+%{
+recordingSect=2;
+for chan = 1:numChannels
+    channelData2(chan,:) = data(datastart(chan,recordingSect):dataend(chan,recordingSect));
+end
+
+channelDataConcat = [channelData, channelData2];
+%}
+
+% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% I learned that if you stop and start the recording, it adds another
+% column to each channel and ends up being ignored. So here is a way to
+% concatenate it
+
+for colNum = 1:numColumns
+    clear channelDataIntermediate
+    clear channelDataExt
+    for chan = 1:numChannels
+        channelDataIntermediate(chan,:) = data(datastart(chan,colNum):dataend(chan,colNum));
+
+        if colNum > 1
+            channelDataExt(chan,:) = horzcat(channelData(chan,:), channelDataIntermediate(chan,:));
+        else
+            channelData(chan,:) = channelDataIntermediate(chan,:);
+        end
+    end
+    if colNum > 1
+        channelData=channelDataExt;
+    end
+
+    channelDataIntermediateEndPoints(colNum,1)=length(channelDataIntermediate);
+end
+
+% I used this to add the last time of the first column to the metadata
+% times for the second portion of the recording
+
+% How many pauses did the recording have, but subtract the first main
+% recording section
+numPauses=numColumns-1;
+
+% The row of the next recorded event following a pause in the recording
+postBreak(numPauses,1)=46;
+% The row of the LAST recorded event for this recording section
+postBreak(numPauses,2)=63;
+
+% This adds the total size of mililsec time of the first/or previous recording
+% section to the next (now focused on) recording section
+for fixPauses = 1:length(postBreak(1,1))
+    metaData.Millisec(postBreak(fixPauses,1):postBreak(fixPauses,2))=...
+        metaData.Millisec(postBreak(fixPauses,1):postBreak(fixPauses,2))+(channelDataIntermediateEndPoints(fixPauses,1));
+end
+
+
+
+%% %% SECTION 6:Assign the different channels their respective variable names 
+% Ventilator Air Pressure  ----- Channel 1
+ventilatorData = channelData(1,:);
+
+% Diaphragm EMG            ----- Channel 2
+emgData = channelData(2,:);
+
+% Laser                    ----- Channel 4
+optoData = channelData(3,:);
+
+% Temperature              ----- Channel 5
+tempData = channelData(4,:);
+
+% ECG Data                 ----- Channel 6
+rawecgData = channelData(5,:);
+
+% ECG Blanker Data         ----- Channel 8
+blankerData = channelData(6,:);
+
+
+
+%% SECTION 7: Create time vector based on sample rate
+
+% Not totally sure what this does and if its always the same or not?
+sampleRate = samplerate(1);
+
+%Original way (but using non-filtered breathData to presumably create a time 
+% vector (based on a specified 'sampleRate' and the length of the signal) 
+% which will represent the time points corresponding 
+% to the samples in your signal.
+time = 0:1/sampleRate:length(ventilatorData)/sampleRate;
+time = time(1:length(time)-1);
+
+%% SECTION 8: OptoData
+
+% Find all the time points in which the laser was on
+minLaser = min(optoData);
+maxLaser = max(optoData);
+middleLaser = maxLaser/2;
+above_zero_indices = optoData > middleLaser;
+start_indices = find(diff(above_zero_indices) == 1);
+end_indices = find(diff(above_zero_indices) == -1);
+
+
+% Find uncommented stimulations (ex. stims 2-5 in 5x repeat sequences)
+new_start_indices=[];
+for b = 1:length(start_indices)
+    if b == 1
+        new_start_indices(1,b)=1;  % If its the first instance
+    elseif start_indices(1,b)-start_indices(1,(b-1)) < 1000 % Less than 1000ms(1s) apart
+        new_start_indices(1,b)=0;
+    else 
+        new_start_indices(1,b)=1;
+    end
+end
+
+% Create an array of all start times for opto
+new_idx= (start_indices(1,[find(new_start_indices == 1)]))';
+new_idx(:,2) = (end_indices(1,[find(new_start_indices == 1)]))';
+
+% Save the array of all start and end times for opto
+Vgatflp_PVcre_Gtacr.(secondfield).opto=new_idx;
+
+%% SECTION 9: Assign metadata info to more accurate ms
+
+% Go through the times of opto starts and compare to metadata to replace
+% with more accurate timestamps
+for optolength = 1:length(new_idx)
+    [minValue,closestIndex]=min(abs((new_idx(optolength,1))-metaData.Millisec(:,1)));
+    if abs(minValue) < 10000
+        % Replace my recorded time with more accurate time
+        metaData.Millisec(closestIndex,1) = new_idx(optolength,1);
+        metaData.Laser_Off(closestIndex,1) = new_idx(optolength,2);
+    end
+end
+
+
+%% SECTION 10: Index the rows for trials marked for deletion
+rowIndexToDelete=[];
+
+for a = 1:size(metaData.Discard)
+    % Check if any element in the cell array is marked for deletion
+    if metaData.Discard{a} == 1
+    % if metaData.Discard(a) == 1
+        rowIndexToDelete = [rowIndexToDelete,a];
+    end
+end
+
+% Remove the time index rows for trials marked for deletion
+
+% Create a logical index to keep the rows that are not to be deleted
+rowsToKeep = true(length(metaData.Discard), 1);
+rowsToKeep(rowIndexToDelete) = false;
+% Use logical indexing to keep only the rows that are not to be deleted
+metaData = metaData(rowsToKeep, :);
+
+%% SECTION 11: Smooth EMG Data
+
+% Define parameters
+Fs = sampleRate; % Sampling frequency (example)
+% Optional: Apply a low-pass filter to smooth the data
+Fpass = 10; % Passband frequency
+
+% Order of the Filter: The order determines the steepness of the filter's 
+% roll-off (the transition from passband to stopband). A higher order means 
+% a steeper roll-off.
+
+% It looks pretty similar whether its 2nd or 4th order
+[b, a] = butter(4, Fpass / (Fs / 2), 'low');
+
+% filtfilt function applies the filter to the data. It uses zero-phase 
+% filtering to avoid phase distortion. This means it filters the data in 
+% both the forward and reverse directions
+smoothedEMG = filtfilt(b, a, blankerData);
+
+%{
+% Normalize the smoothed EMG to match the original EMG mean and standard deviation
+originalMean = mean(blankerData);
+originalStd = std(blankerData);
+smoothedMean = mean(smoothedEMG);
+smoothedStd = std(smoothedEMG);
+
+% Adjust the smoothed EMG
+normalizedSmoothedEMG = (smoothedEMG - smoothedMean) * (originalStd / smoothedStd) + originalMean;
+%}
+
+%clearvars smoothedEMG positiveSegments positiveStartIndices positiveEndIndices
+
+clipValue=0.02;
+% Clip negative (or small ecg) values to zero
+smoothedEMG(smoothedEMG < clipValue) = 0;
+
+% Identify segments where the smoothed EMG is greater than zero
+positiveSegments = smoothedEMG > 0;
+
+% Find the start and end indices of smoothed emg segments
+positiveStartIndices = find(diff(positiveSegments) == 1);
+positiveEndIndices = find(diff(positiveSegments) == -1);
+
+% Plotting the results
+figure;
+subplot(3, 1, 1);
+plot(time,ventilatorData,'Color','k');
+hold on
+title('Mechanically Ventilated');
+xlabel('Time (s)');
+ylabel('Lung Air Pressure (cmH2O)');
+
+% Making a solid mark above the breathing trace to represent the time of
+% opto laser
+for i = 1:length(start_indices)
+    x_start = time(start_indices(i));
+    x_end = time(end_indices(i));
+    width = x_end - x_start;
+    %height = abs(y_max_below) - abs(y_min_below);
+    %rectangle('Position', [x_start, y_min_below, width, height], 'FaceColor', 'c','EdgeColor','none');
+    
+    %If I have specific numbers in mind
+    rectangle('Position', [x_start,15, width, 0.5], 'FaceColor', 'c','EdgeColor','none');
+    % rectangle('Position', [x_start, y_min, width, height], 'c');
+end
+
+
+subplot(3, 1, 2);
+% if using blanker
+plot(time, blankerData);
+% if not
+% plot(time, rectifiedEMG);
+title('Original EMG Data');
+subtitle('(after ECG blanker)')
+xlabel('Time (s)');
+ylabel('Rectified Raw EMG Signal (a.u.)');
+
+subplot(3, 1, 3);
+plot(time, smoothedEMG);
+hold on;
+title('Smoothed EMG Data');
+%subtitle(['Low Pass - 10 Hz ; clip value:' num2str(clipValue)])
+xlabel('Time (s)');
+ylabel('Smoothed EMG Signal (a.u.)');
+
+%{
+% Mark bursts with rectangles
+subplot(3, 1, 4);
+hold on;
+for emgtick = 1:length(positiveStartIndices)
+    % Mark the segments with rectangles
+    rectangle('Position', [time(positiveStartIndices(emgtick)), 0, ...
+        time(positiveEndIndices(emgtick)) - time(positiveStartIndices(emgtick)), 1], ...
+        'FaceColor', 'k', 'EdgeColor', 'none');
+end
+ylim([0 1]);
+% title('Segments where Smoothed EMG > 0');
+xlabel('Time (s)');
+yticks([]);
+hold off;
+%}
+
+
+% Link x-axes of all subplots
+h = findall(gcf, 'Type', 'axes');
+linkaxes(h, 'x');
+
+dataPt=7;
+xlim([((metaData.Millisec(dataPt)/sampleRate)-10) ((metaData.Millisec(dataPt)/sampleRate)+10)]);
+
+%~~~~~~~~~~~~Save the progress so far in the struct 
+% Save the time array
+Vgatflp_PVcre_Gtacr.(secondfield).time=time;
+% Save the ventilator data
+Vgatflp_PVcre_Gtacr.(secondfield).ventilatorData=ventilatorData;
+% Save the blanker data
+Vgatflp_PVcre_Gtacr.(secondfield).blankerData=blankerData;
+% Save the smoothed emg data
+Vgatflp_PVcre_Gtacr.(secondfield).smoothedEMG=smoothedEMG;
+% Save the sampleRate
+Vgatflp_PVcre_Gtacr.(secondfield).sampleRate=sampleRate;
+
+
+%% SECTION 12: Find BHR start
+
+%Preallocate array for user input
+userInput=zeros((length(metaData.Millisec)),1);
+
+for bhrSearch = 1:length(metaData.Millisec)
+    if isnumeric(metaData.WM0XXX(bhrSearch)) && ~isnan(metaData.WM0XXX(bhrSearch))
+        % Define the approximate start time of the breath hold
+        approxStartTime = (metaData.Millisec(bhrSearch)/sampleRate);
+
+        % Define the time window around the approximate start time to search for the peak
+        windowSize = 4; % seconds
+        startIndexBHR = find(time >= approxStartTime - windowSize, 1);
+        endIndexBHR = find(time >= approxStartTime + windowSize + 2, 1);
+
+        % Extract the segment of the pressure signal within the time window
+        pressureSegment = ventilatorData(startIndexBHR:endIndexBHR);
+        timeSegment = time(startIndexBHR:endIndexBHR);
+        
+        % Find the peak in the segment
+        [peakValue, peakIndex] = max(pressureSegment);
+        
+        % Convert the peak index back to the original time
+        peakTime = timeSegment(peakIndex);
+        
+        % Define the duration to check after the peak
+        holdDuration = 1; % seconds
+        
+        % Convert the duration to indices
+        holdEndIndex = find(time >= peakTime + holdDuration, 1);
+        
+        % Extract the segment after the peak
+        holdSegment = ventilatorData(peakIndex+startIndexBHR-1 : holdEndIndex);
+        
+        % Check if the signal stays flat or drops slowly (on average)
+        % compared to the peak value
+        threshold = 4; % Define a threshold for "flatness" --- in cmH20
+
+        avgAbsDiff = mean(abs(holdSegment - peakValue));
+        % Check if the average absolute difference is less than the threshold
+        isFlat = avgAbsDiff < threshold;
+
+        if isFlat
+            metaData.startBHR(bhrSearch) = peakTime; 
+        else
+            % This will tell me to look into it
+            metaData.startBHR(bhrSearch) = 1;
+        end
+
+        fig = figure;
+        plot(time, ventilatorData, 'b', 'DisplayName', 'Air Pressure');
+        hold on;
+        plot(timeSegment, pressureSegment, 'r', 'DisplayName', 'Search Window');
+        plot(peakTime, peakValue, 'go', 'MarkerSize', 10, 'DisplayName', 'Detected Peak');
+        title('Air Pressure with Breath Hold Detection');
+        xlabel('Time (s)');
+        ylabel('Pressure');
+        legend;
+        hold off;
+        
+        zoom on;
+        disp('Press any key to continue, or press 1 if the graph is incorrect.');
+
+        while true
+            % Wait for the user to press any key
+            w = waitforbuttonpress;  % Wait for a key press or mouse click
+            if w == 1
+                % Check the key pressed
+                key = get(gcf, 'CurrentCharacter');  % Get the last key pressed
+   
+                if key == '1'
+                    % If the key '1' was pressed, mark the figure as incorrect
+                    userInput(bhrSearch,1)= 1; 
+                    disp(['Marked Figure ', num2str(bhrSearch), ' as incorrect.']);
+                end
+                break; % Exit the loop after handling the key press
+            end
+        end
+        
+        % Close the current figure
+        close(fig);
+
+    else
+        metaData.startBHR(bhrSearch) = 0;
+    end
+end
+
+
+
+%Use for single sanity check for above
+% Plotting the results
+figure;
+plot(time, ventilatorData, 'b', 'DisplayName', 'Air Pressure');
+hold on;
+plot(timeSegment, pressureSegment, 'r', 'DisplayName', 'Search Window');
+plot(peakTime, peakValue, 'go', 'MarkerSize', 10, 'DisplayName', 'Detected Peak');
+title('Air Pressure with Breath Hold Detection');
+xlabel('Time (s)');
+ylabel('Pressure');
+legend;
+hold off;
+
+trial_num=22;
+array=metaData;
+xlim([((array.Millisec(trial_num)/sampleRate)-7) ((array.Millisec(trial_num)/sampleRate)+10)]);
+
+xlim([((metaData.startBHR(20))-7) ((metaData.startBHR(20))+10)]);
+
+%}
+
+%~~~~~~~~~~ You know the drill, save what you don't wana lose! 
+% Save metaData
+Vgatflp_PVcre_Gtacr.(secondfield).metaData=metaData;
+
+%BotC_Vgatcre_Gtacr.(secondfield).original_metaData=originalmetaData;
+
+%% SECTION 13: Separate into three different arrays
+clearvars hasValueInWM hasValueInPower bhrOnly bhrLaser laserOnly
+
+% Check if column  has a value (not NaN)
+hasValueInPower = ~isnan(metaData.Power);
+
+% Check if column B does not have a value (is NaN)
+hasValueInWM = ~isnan(metaData.WM0XXX);
+
+bhrOnly = metaData((~hasValueInPower & hasValueInWM),:);
+
+bhrLaser = metaData((hasValueInPower & hasValueInWM),:);
+% This is only the length of the laser on time (in sec), it is NOT aligned
+% to the time scale of the raster --- the raster is aligned to start of BHR
+bhrLaser.Laser_Length=(bhrLaser.Laser_Off-bhrLaser.Millisec)/sampleRate;
+
+laserOnly = metaData((hasValueInPower & ~hasValueInWM),:);
+% Since this raster is aligned to the start of the laser, this result will
+% give not only the length of the laser (in sec) but also the point in
+% which the laser turns off according to the aligned raster time
+laserOnly.Aligned_Laser=(laserOnly.Laser_Off-laserOnly.Millisec)/sampleRate;
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Save subcategories
+Vgatflp_PVcre_Gtacr.(secondfield).bhrOnly.sub_metaData=bhrOnly;
+Vgatflp_PVcre_Gtacr.(secondfield).bhrLaser.sub_metaData=bhrLaser;
+Vgatflp_PVcre_Gtacr.(secondfield).laserOnly.sub_metaData=laserOnly;
+
+Vgatflp_PVcre_Gtacr.(secondfield).laserOnly_long.sub_metaData=laserOnly_long;
+
+thirdfield='bhrOnly_WS2';
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield).sub_metaData=bhrOnly_WS2;
+thirdfield='bhrLaser_WS2';
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield).sub_metaData=bhrLaser_WS2;
+thirdfield='laserOnly_OffTarg';
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield).sub_metaData=laserOnly_OffTarg;
+
+
+
+thirdfield='laserOnly_3s';
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield).sub_metaData=laserOnly_3s;
+thirdfield='laserOnly_5s_Power80';
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield).sub_metaData=laserOnly_5s_Power80;
+
+
+
+%Vgatcre_Gtacr.(secondfield).laserMidOfBHR.sub_metaData=metaData(28:30,:);
+
+%% CHECKPOINT
+% Save struct at this point as backup?
+% Save specific variables to a MAT file in the specified directory
+% Specify the file name
+varfilename = ['VgatFlp_PVcre_Gtacr_00_01_02_03_ctrlnum3_struct_backup_250811.mat'];
+save(fullfile(saveDir, varfilename),'Vgatflp_PVcre_Gtacr');
+
+
+% Save workspace as backup?
+varfilename = 'control_VgatFlp_PVcreWT_Gtacr_num3_rec250806_workspace_backup_250811';
+save(fullfile(saveDir, varfilename));
+
+%% SECTION idk: Make separate arrays for each stimulation frequency
+
+% May need another one to grab any that don't qualify for any of the above?
+%FreqOther = [];
+
+bhrLaser_Power100 = bhrLaser([find(bhrLaser.Power == 100)],:);
+laserOnly_onTarg = laserOnly([find(laserOnly.On_target == 1)],:);
+bhrLaser_OffTarg = bhrLaser([find(bhrLaser.On_target == 0)],:);
+laserOnly_OffTarg = laserOnly([find(laserOnly.On_target == 0)],:);
+
+laserOnly_4s = laserOnly([find(laserOnly.Aligned_Laser == 4.3490)],:);
+laserOnly_10s = laserOnly([find(laserOnly.Aligned_Laser == 10.3490)],:);
+laserOnly_20s = laserOnly([find(laserOnly.Aligned_Laser == 20.3490)],:);
+
+laserOnly_3s = laserOnly([find(laserOnly.Aligned_Laser == 3.1990)],:);
+laserOnly_3s_Power80 = laserOnly_3s([find(laserOnly_3s.Power == 80)],:);
+
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Save subcategories
+secondfield='PVcre_Vgatflp_Gtacr_01_5315325';
+thirdfield='bhrOnly_WS5';
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield)=[];
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield).metaData=bhrOnly_WS5;
+
+% Save new *final* subcategories 
+Vgatflp_PVcre_Gtacr.(secondfield).bhrOnly.metaData=bhrOnly;
+Vgatflp_PVcre_Gtacr.(secondfield).bhrLaser.metaData=bhrLaser;
+Vgatflp_PVcre_Gtacr.(secondfield).laserOnly.metaData=laserOnly;
+
+
+
+Vgatflp_PVcre_Gtacr.(secondfield).bhrOnly_final.sub_metaData=bhrOnly_final;
+
+Vgatflp_PVcre_Gtacr.(secondfield).bhrLaser_final.sub_metaData=bhrLaser_final;
+Vgatflp_PVcre_Gtacr.(secondfield).bhrLaser_onTarg.sub_metaData=bhrLaser_onTarg;
+Vgatflp_PVcre_Gtacr.(secondfield).bhrLaser_OffTarg.sub_metaData=bhrLaser_OffTarg;
+
+Vgatflp_PVcre_Gtacr.(secondfield).laserOnly_final.sub_metaData=laserOnly_final;
+Vgatflp_PVcre_Gtacr.(secondfield).laserOnly_onTarg.sub_metaData=laserOnly_onTarg;
+Vgatflp_PVcre_Gtacr.(secondfield).laserOnly_OffTarg.sub_metaData=laserOnly_OffTarg;
+
+Vgatflp_PVcre_Gtacr.(secondfield).laserOnly_4s.sub_metaData=laserOnly_4s;
+Vgatflp_PVcre_Gtacr.(secondfield).laserOnly_10s.sub_metaData=laserOnly_10s;
+Vgatflp_PVcre_Gtacr.(secondfield).laserOnly_10s.sub_metaData=laserOnly_20s;
+
+Vgatflp_PVcre_Gtacr.(secondfield).bhrLaser_Power100_metaData=bhrLaser_Power100;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield)=[];
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield).metaData=laserOnly_3s_Power80;
+
+%Freq33 = metaData([find(metaData.Frequency_Hz == 0.33)],:);
+%Freq1 = metaData([find(metaData.Frequency_Hz == 1)],:);
+
+
+
+%% SECTION 14: Extracting EMG Peaks within subcategry sections
+%~~~~~~~~~~~~~~~~ For the sub-categories ~~~~~~~~~~~~~~~~~~~~~~~~ 
+
+% Define segment duration parameters
+beforePeak = 10; % seconds before peak
+afterPeak = 10; % seconds after peak
+
+Vgatflp_PVcre_Gtacr.(secondfield).beforePeak=beforePeak;
+Vgatflp_PVcre_Gtacr.(secondfield).afterPeak=afterPeak;
+
+%% SECTION 15: 
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%~~~~~~~~~       BHR Only      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+clear rasterValues rasterTimes normrasterTimes normrasterValues
+% bhrOnly~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+bhrOnly_array=bhrOnly;
+thirdfield_bhrOnly='bhrOnly';
+
+% Check if the duration of the signal is the same for all trials
+col = bhrOnly_array.WSXX(:);  
+if numel(unique(col)) ~= 1
+    disp('Values in the column are not all the same.');
+else
+    disp('You are good! Values in the column are all the same.');
+end
+
+% Grab the first value of signal to use below
+signalTime_bhrOnly=bhrOnly_array.WSXX(1);
+
+% Create the segment of recording that will include the signal plus the
+% baseline and post-signal segments (plus a little extra)
+beforePeak_bhrOnly=signalTime_bhrOnly+2;
+afterPeak_bhrOnly=(2*signalTime_bhrOnly)+2;
+
+% Create the values for the baseline and post-signal segments 
+baseline_bhrOnly= [-1 -(signalTime_bhrOnly+1)];
+post_bhrOnly= [signalTime_bhrOnly+1 (2*signalTime_bhrOnly)+1];
+
+
+% Raster plot times & values
+%[rasterTimes, rasterValues, normrasterTimes, normrasterValues]=emgPeak_segments(category_field, laser_only,...
+%    sampleRate,emgDurThresh,emgPhysThresh, minPeakHeight,beforePeak,afterPeak,time,smoothedEMG)
+
+% Quick Copy
+% [rasterTimes, rasterValues, normrasterTimes, normrasterValues]=emgPeak_segments(laserOnly.Millisec, 1,...
+    % sampleRate,emgDurThresh,emgPhysThresh,minPeakHeight,beforePeak,afterPeak,time,smoothedEMG)
+
+
+
+[rasterTimes, rasterValues, normrasterTimes, normrasterValues]=emgPeak_segments(bhrOnly_array.startBHR, 0,...
+    sampleRate,0.1,0.2,0.04,beforePeak_bhrOnly,afterPeak_bhrOnly,time,smoothedEMG);
+
+%~~~~~~~~~~~~~~~~~~~~~
+% Do sanity check!!!
+% ~~~~~~~~~~~~~~~~~~~~~~
+for sanityCheck=1:length(rasterValues)
+    limit = 0.03;            % Defined limit of y-value for integrated, smoothed emg
+    array=rasterValues{1,sanityCheck};
+    
+    if any(array < limit)
+        disp(['Array ' num2str(sanityCheck) ' has a value below the limit']);
+    else
+        disp(['All values in array' num2str(sanityCheck) ' are above the limit.']);
+    end
+
+end
+
+trial_num=1;
+xlim([((bhrOnly_array.startBHR(trial_num))-beforePeak_bhrOnly) ((bhrOnly_array.startBHR(trial_num))+afterPeak_bhrOnly)]);
+
+
+% ~~~~~~~~~~~~~~~~~~~~Delete a column from all raster arrays~~~~~~~~
+% Specify the column to delete
+cellToDelete = 11; 
+columnToDelete = 22;
+
+    rasterValues{1,cellToDelete}(:, columnToDelete) = [];
+    rasterTimes{1,cellToDelete}(:, columnToDelete) = [];
+    normrasterTimes{1,cellToDelete}(:, columnToDelete) = [];
+    normrasterValues{1,cellToDelete}(:, columnToDelete) = [];
+
+% Delete a whole cell    
+    rasterValues{1,cellToDelete} = [];
+    rasterTimes{1,cellToDelete} = [];
+    normrasterTimes{1,cellToDelete} = [];
+    normrasterValues{1,cellToDelete} = [];
+
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+for sanityCheck=1:length(rasterTimes)
+    limit = 0.11;            % Defined limit time in between emg bursts
+    array=rasterTimes{1,sanityCheck};
+
+    problem=[];
+
+    for nth=2:length(array)
+        if abs (array(1,nth) - array(1,(nth-1))) < limit
+            problem = [problem,nth]; 
+        end
+    end
+    
+    if ~isempty(problem)
+        disp(['There is an absolute difference smaller than the threshold in array ' num2str(sanityCheck)]);
+        disp(['Check trials: ' num2str(problem)]);
+
+    else
+        disp(['All values in array ' num2str(sanityCheck) ' are the correct time apart.']);
+    end
+end
+
+% Use this to check air pressure and emg plot
+trial=10;
+xlim([((bhrOnly_array.startBHR(trial))-beforePeak_bhrOnly) ((bhrOnly_array.startBHR(trial))+afterPeak_bhrOnly)]);
+%ylim(['auto'])
+
+% Signal
+xline (bhrOnly_array.startBHR(trial),'--b');
+xline (bhrOnly_array.startBHR(trial)+signalTime_bhrOnly,'--b');
+
+% Baseline
+xline (bhrOnly_array.startBHR(trial)+baseline_bhrOnly(1),'--r');
+xline (bhrOnly_array.startBHR(trial)+baseline_bhrOnly(2),'--r');
+
+% Post
+xline (bhrOnly_array.startBHR(trial)+post_bhrOnly(1),'--r');
+xline (bhrOnly_array.startBHR(trial)+post_bhrOnly(2),'--r');
+
+
+%~~~~~~~~~~~~~~~~~~~~~~~~ Save all that work! 
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).rasterTimes=rasterTimes;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).rasterValues=rasterValues;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).normal_rasterTimes=normrasterTimes;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).normal_rasterValues=normrasterValues;
+
+clear histInsp binEdges inspMat
+%~~~~~~~~~~~~~~~~~~~~~
+% Now histogram
+% ~~~~~~~~~~~~~~~~~~~~~~
+% [histInsp, binEdges, inspMat]=rasterplot_BHR(beforePeak, afterPeak, binNum,...
+%    parameter_table, rasterTimes, title_name, subtitle_name,varSave,param_name,filename,...
+%    saveDir,makePSTH, makeHisto,secondXline)
+% 
+% Quick copy
+    % [histInsp, binEdges, inspMat]=rasterplot_BHR(beforePeak,afterPeak,16,bhrOnly.startBHR,...
+    % rasterTimes,'SSTcre Gtacr #00','BHR only',0,[],[],[],1,1,secondXline); 
+[histInsp, binEdges, inspMat]=rasterplot_BHR(beforePeak_bhrOnly,afterPeak_bhrOnly,28,bhrOnly_array.startBHR,...
+rasterTimes,mouse_ID,'BHR Only',0,[],[],[],1,0,signalTime_bhrOnly);
+
+% Baseline
+xline (baseline_bhrOnly(1),'--r');
+xline (baseline_bhrOnly(2),'--r');
+
+% Post
+xline (post_bhrOnly(1),'--r');
+xline (post_bhrOnly(2),'--r');
+
+%~~~~~~~~~~~~~~~~~~~~~~~~ Save all that work! 
+
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).histInsp=histInsp;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).binEdges=binEdges;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).inspMat=inspMat;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).binNum=28;
+
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).metaData=bhrOnly_array;
+
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% Get Baseline, Signal, & Post EMG Times - Frequency per segment
+% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+% [boxplotCells,meanBaseline,meanSignal,meanPost]=boxplotValues_rastertime(raster_array, base_start, base_end,...
+%    signal_end,post_start,post_end)
+[boxplotCells,meanBaseline,meanSignal,meanPost,boxplot_numel,...
+    boxplot_std] = boxplotValues_rastertime(rasterTimes,baseline_bhrOnly(2),...
+    baseline_bhrOnly(1), signalTime_bhrOnly, post_bhrOnly(1), post_bhrOnly(2));
+
+emgFreq(1,1)=meanBaseline/meanBaseline;
+emgFreq(1,2)=meanSignal/meanBaseline;
+emgFreq(1,3)=meanPost/meanBaseline;
+
+
+%{
+BotC_Vgatcre_Gtacr.(secondfield).bhrOnly_ws3.rasterTimes=rasterTimes(1,(19:end));
+BotC_Vgatcre_Gtacr.(secondfield).bhrOnly_ws3.rasterValues=rasterValues(1,(19:end));
+BotC_Vgatcre_Gtacr.(secondfield).bhrOnly_ws3.normrasterTimes=normrasterTimes(1,(19:end));
+BotC_Vgatcre_Gtacr.(secondfield).bhrOnly_ws3.normrasterValues=normrasterValues(1,(19:end));
+%}
+
+%~~~~~~~~~~~~~~~~~~~~~
+% Now boxplot for EMG freq
+% ~~~~~~~~~~~~~~~~~~~~~~
+
+% Plot Boxplot
+% Condition labels
+group = [1 2 3];
+
+% function []=plot_boxplot(group,data_array,category,min_ylim,max_ylim,...
+% condition_title,subtitle_name)
+plot_boxplot(group,emgFreq,'BHR Only',0,3,'EMG Frequency','baseline from -4 to -1, signal 0 to 3, post from 4 to 7');
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% Get Baseline, Signal, & Post - Frequency per sec
+% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+clear emgPerSec
+
+emgPerSec(1,1)=meanBaseline/signalTime_bhrOnly;
+emgPerSec(1,2)=meanSignal/signalTime_bhrOnly;
+emgPerSec(1,3)=meanPost/signalTime_bhrOnly;
+
+
+%~~~~~~~~~~~~~~~~~~~~~~~~ Save all that work! 
+
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).boxplotValues_time=boxplotCells;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).meanBaseline=meanBaseline;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).meanSignal=meanSignal;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).meanPost=meanPost;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).freq_boxplot_numel=boxplot_numel;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).freq_boxplot_std=boxplot_std;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).emgFreq=emgFreq;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).WSXX=signalTime_bhrOnly;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).emgPerSec=emgPerSec;
+    
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% EMG Amplitude : Get Baseline, Signal, & Post EMG Values
+% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+% function [emgValues_master,emgValues_master_mean]=boxplotValues_rastervalues(raster_array,...
+%    boxplotCells)
+
+%boxplotCells=BotC_PVcre_Gtacr.(secondfield).(thirdfield).boxplotValues_time;
+
+clear emgValues_master_mean emgValues_master emgAmp
+[emgValues_master,emgValues_master_mean]=boxplotValues_rastervalues...
+    (rasterValues,boxplotCells);
+
+emgValues_master_mean=cell2mat(emgValues_master_mean);
+% Replace NaN values with 0
+emgValues_master_mean(isnan(emgValues_master_mean)) = 0;
+
+
+%~~~~~~~~~~~~~~~~~~~~~
+% EMG VALUES : Percent of baseline
+% ~~~~~~~~~~~~~~~~~~~~~~
+
+% emgValues_master_mean = PVcre_Gtacr.(secondfield).bhrOnly.emgValues_master_mean;
+
+for f = 1:size(emgValues_master_mean,1)
+    emgValues_mean_percent(f,1) = emgValues_master_mean(f,1)/emgValues_master_mean(f,1);
+    emgValues_mean_percent(f,2) = emgValues_master_mean(f,2)/emgValues_master_mean(f,1);
+    emgValues_mean_percent(f,3) = emgValues_master_mean(f,3)/emgValues_master_mean(f,1);   
+end
+
+amp_meanBaseline=mean(emgValues_mean_percent(:,1));
+amp_meanSignal=mean(emgValues_mean_percent(:,2));
+amp_meanPost=mean(emgValues_mean_percent(:,3));
+
+emgAmp(1,1)=amp_meanBaseline/amp_meanBaseline;
+emgAmp(1,2)=amp_meanSignal/amp_meanBaseline;
+emgAmp(1,3)=amp_meanPost/amp_meanBaseline;
+
+%~~~~~~~~~~~~~~~~~~~~~
+% Now boxplot for EMG Values
+% ~~~~~~~~~~~~~~~~~~~~~~
+
+% Plot Boxplot
+% Condition labels
+group = [1 2 3];
+
+% fplot_boxplot(group,data_array,category,min_ylim,max_ylim,condition_title,subtitle_name)
+% Quick copy
+plot_boxplot(group,emgValues_mean_percent,'BHR Only',0,3,'EMG Amplitude',[]);
+
+% ~~~~~~~~~~~~~~~~~~~~~~~~~ Save to Struct
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).emgValues_master=emgValues_master;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).emgValues_master_mean=emgValues_master_mean;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).emgValues_mean_percent=emgValues_mean_percent;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrOnly).emgAmp=emgAmp;
+
+%% SECTION 16: 
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%~~~~~~~~~       BHR & Laser      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+
+clear rasterValues rasterTimes normrasterTimes normrasterValues
+% bhrLaser~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~    
+%[rasterTimes, rasterValues, normrasterTimes, normrasterValues]=emgPeak_segments(category_field, laser_only,...
+%    sampleRate,emgDurThresh,emgPhysThresh, minPeakHeight,beforePeak,afterPeak,time,smoothedEMG)
+
+thirdfield_bhrLaser='bhrLaser';
+bhrLaser_array=bhrLaser;
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~ LASER LENGTH ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% Check if the duration of the laser length is the same for all trials
+col = bhrLaser_array.Laser_Length(:);  
+if numel(unique(col)) ~= 1
+    disp('Values in the laser length column are not all the same.');
+else
+    disp('You are good! Values in the laser length column are all the same.');
+end
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~ BHR LENGTH ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% Check if the duration of the laser length is the same for all trials
+col = bhrLaser_array.WSXX(:);  
+if numel(unique(col)) ~= 1
+    disp('Values in the BHR length column are not all the same.');
+else
+    disp('You are good! Values in the BHR length column are all the same.');
+end
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~ LASER POWER ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% Check if the duration of the laser length is the same for all trials
+col = bhrLaser_array.Power(:);  
+if numel(unique(col)) ~= 1
+    disp('Values in the Laser Power column are not all the same.');
+else
+    disp('You are good! Values in the Laser Power column are all the same.');
+end
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+
+% Grab the first value of signal to use below
+signalTime_bhrLaser=bhrLaser_array.WSXX(1);
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% Center the Laser time around 0 so I know how far to go back for baseline
+% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+zerodLaser=(bhrLaser_array.Millisec/sampleRate)-bhrLaser_array.startBHR;
+fprintf('The baseline must be lower than %d\n', min(zerodLaser)); 
+
+lowestBaseline=floor(min(zerodLaser));
+
+
+% Create the segment of recording that will include the signal plus the
+% baseline and post-signal segments (plus a little extra)
+beforePeak_bhrLaser=signalTime_bhrLaser+3+abs(lowestBaseline);
+afterPeak_bhrLaser=(2*signalTime_bhrLaser)+3;
+
+% Create the values for the baseline and post-signal segments 
+baseline_bhrLaser= [lowestBaseline -(signalTime_bhrLaser+abs(lowestBaseline))];
+post_bhrLaser= [signalTime_bhrLaser+2 (2*signalTime_bhrLaser)+2];
+
+
+%[rasterTimes, rasterValues, normrasterTimes, normrasterValues]=emgPeak_segments(category_field, laser_only,...
+%    sampleRate,emgDurThresh,emgPhysThresh, minPeakHeight,beforePeak,afterPeak,time,smoothedEMG) 
+[rasterTimes, rasterValues, normrasterTimes, normrasterValues]=emgPeak_segments(bhrLaser_array.startBHR, 0,...
+    sampleRate,0.1,0.15,0.04,beforePeak_bhrLaser,afterPeak_bhrLaser,time,smoothedEMG);
+
+%~~~~~~~~~~~~~~~~~~~~~
+% Do sanity check!!!
+% ~~~~~~~~~~~~~~~~~~~~~~
+for sanityCheck=1:length(rasterValues)
+    limit = 0.04;            % Defined limit of y-value for integrated, smoothed emg
+    array=rasterValues{1,sanityCheck};
+    
+    if any(array < limit)
+        disp(['Array ' num2str(sanityCheck) ' has a value below the limit']);
+    else
+        disp(['All values in array' num2str(sanityCheck) ' are above the limit.']);
+    end
+
+end
+
+% ~~~~~~~~~~~~~~~~~~~~Delete a column from all raster arrays~~~~~~~~
+% Use this to check air pressure and emg plot
+trial=1;
+xlim([((bhrLaser_array.startBHR(trial))-beforePeak_bhrLaser) ((bhrLaser_array.startBHR(trial))+afterPeak_bhrLaser)]);
+
+
+% Specify the column to delete
+cellToDelete = 4; 
+columnToDelete =28;
+
+    rasterValues{1,cellToDelete}(:, columnToDelete) = [];
+    rasterTimes{1,cellToDelete}(:, columnToDelete) = [];
+    normrasterTimes{1,cellToDelete}(:, columnToDelete) = [];
+    normrasterValues{1,cellToDelete}(:, columnToDelete) = [];
+
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+for sanityCheck=1:length(rasterTimes)
+    limit = 0.11;            % Defined limit time in between emg bursts
+    array=rasterTimes{1,sanityCheck};
+
+    problem=[];
+
+    for nth=2:length(array)
+        if abs (array(1,nth) - array(1,(nth-1))) < limit
+            problem = [problem,nth]; 
+        end
+    end
+    
+    if ~isempty(problem)
+        disp(['There is an absolute difference smaller than the threshold in array ' num2str(sanityCheck)]);
+        disp(['Check trials: ' num2str(problem)]);
+
+    else
+        disp(['All values in array ' num2str(sanityCheck) ' are the correct time apart.']);
+    end
+end
+
+
+trial=2;
+xlim([((bhrLaser_array.startBHR(trial))-beforePeak_bhrLaser) ((bhrLaser_array.startBHR(trial))+afterPeak_bhrLaser)]);
+%ylim([0 3]);
+
+% Signal
+xline ((bhrLaser_array.startBHR(trial)),'--b');
+xline (bhrLaser_array.startBHR(trial)+signalTime_bhrLaser,'--b');
+
+% Baseline
+xline ((bhrLaser_array.startBHR(trial))+baseline_bhrLaser(1),'--r');
+xline ((bhrLaser_array.startBHR(trial))+baseline_bhrLaser(2),'--r');
+
+% Post
+xline ((bhrLaser_array.startBHR(trial))+post_bhrLaser(1),'--r');
+xline ((bhrLaser_array.startBHR(trial))+post_bhrLaser(2),'--r');
+
+
+% ~~~~~~~~~~~~~~~~~~~~~~~~~ Save to Struct
+% thirdfield_bhrLaser='bhrLaser_WS2';
+%Oprm1flp_Vgatcre_Gtacr.(secondfield).(thirdfield_bhrLaser)=[];
+
+%Oprm1flp_Vgatcre_Gtacr.(secondfield).(thirdfield_bhrLaser).metadata=bhrLaser;
+
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).rasterTimes=rasterTimes;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).rasterValues=rasterValues;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).normrasterTimes=normrasterTimes;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).normrasterValues=normrasterValues;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).metadata=bhrLaser_array;
+
+
+
+%~~~~~~~~~~~~~~~~~~~~~
+% Now histogram
+% ~~~~~~~~~~~~~~~~~~~~~~
+% [histInsp, binEdges, inspMat]=rasterplot_BHR(beforePeak, afterPeak, binNum,...
+%    parameter_table, rasterTimes, title_name, subtitle_name,varSave,param_name,filename,...
+%    saveDir,makePSTH, makeHisto,secondXline)
+% 
+% Quick copy
+    % [histInsp, binEdges, inspMat]=rasterplot_BHR(beforePeak,afterPeak,16,bhrOnly.startBHR,...
+    % rasterTimes,'SSTcre Gtacr #00','BHR only',0,[],[],[],1,1,secondXline); 
+clear histInsp binEdges inspMat
+    
+[histInsp, binEdges, inspMat]=rasterplot_BHR(beforePeak_bhrLaser,afterPeak_bhrLaser,20,bhrLaser_array.startBHR,...
+rasterTimes,mouse_ID,'BHR & Laser',0,[],[],[],1,0,signalTime_bhrLaser);
+
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% Plot Laser over Raster
+% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+width=mean(bhrLaser_array.Laser_Length(:));
+height = 0.2;
+
+for eachLine = 1:length(zerodLaser)
+
+    rectangle('Position', [zerodLaser(eachLine,1), eachLine - height/2, width, height], ...
+          'FaceColor', 'c', 'EdgeColor', 'none'); 
+end
+
+
+% Baseline
+xline (baseline_bhrLaser(1),'--r');
+xline (baseline_bhrLaser(2),'--r');
+
+% Post
+xline (post_bhrLaser(1),'--r');
+xline (post_bhrLaser(2),'--r');
+
+% ~~~~~~~~~~~~~~~~~~~~~~~~~ Save to Struct
+%fourthfield='bin_20';
+
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).histInsp=histInsp;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).binEdges=binEdges;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).inspMat=inspMat;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).zerod_laser_times=zerodLaser;
+
+
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% EMG Times : Get Baseline, Signal, & Post  - Frequency per segment
+% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+clear boxplotCells meanBaseline meanSignal meanPost
+
+% [boxplotCells,meanBaseline,meanSignal,meanPost]=boxplotValues_rastertime(raster_array, base_start, base_end,...
+%    signal_end,post_start,post_end)
+[boxplotCells,meanBaseline,meanSignal,meanPost,boxplot_numel,...
+    boxplot_std] = boxplotValues_rastertime(rasterTimes,baseline_bhrLaser(2),...
+    baseline_bhrLaser(1), signalTime_bhrLaser, post_bhrLaser(1), post_bhrLaser(2));
+
+clear emgFreq
+
+emgFreq(1,1)=meanBaseline/meanBaseline;
+emgFreq(1,2)=meanSignal/meanBaseline;
+emgFreq(1,3)=meanPost/meanBaseline;
+
+%~~~~~~~~~~~~~~~~~~~~~
+% Now boxplot for EMG freq
+% ~~~~~~~~~~~~~~~~~~~~~~
+
+% Plot Boxplot
+% Condition labels
+group = [1 2 3];
+
+% function []=plot_boxplot(group,data_array,category,min_ylim,max_ylim,condition_title)
+% Quick copy
+plot_boxplot(group,emgFreq,'BHR & Laser',0,2,'EMG Frequency',[]);
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% Get Baseline, Signal, & Post - Frequency per sec
+% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+clear emgPerSec
+
+emgPerSec(1,1)=meanBaseline/signalTime_bhrLaser;
+emgPerSec(1,2)=meanSignal/signalTime_bhrLaser;
+emgPerSec(1,3)=meanPost/signalTime_bhrLaser;
+
+
+% ~~~~~~~~~~~~~~~~~~~~~~~~~ Save to Struct
+
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).boxplotValues_time=boxplotCells;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).meanBaseline=meanBaseline;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).meanSignal=meanSignal;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).meanPost=meanPost;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).emgFreq=emgFreq;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).freq_boxplot_numel=boxplot_numel;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).freq_boxplot_std=boxplot_std;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).WSXX=signalTime_bhrLaser;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).emgPerSec=emgPerSec;
+
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% EMG Amplitude : Get Baseline, Signal, & Post EMG Values
+% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+% function [emgValues_master,emgValues_master_mean]=boxplotValues_rastervalues(raster_array,...
+%    boxplotCells)
+
+% boxplotCells=BotC_PVcre_Gtacr.Vglut2cre_Gtacr_00_767A_240711.bhrLaser.boxplotValues_time;
+% boxplotCells=BotC_PVcre_Gtacr.(secondfield).(thirdfield).boxplotValues_time;
+
+
+clear emgValues_master emgValues_master_mean
+[emgValues_master,emgValues_master_mean]=boxplotValues_rastervalues...
+    (rasterValues,boxplotCells);
+
+emgValues_master_mean=cell2mat(emgValues_master_mean);
+% Replace NaN values with 0
+emgValues_master_mean(isnan(emgValues_master_mean)) = 0;
+
+%~~~~~~~~~~~~~~~~~~~~~
+% EMG VALUES : Percent of baseline
+% ~~~~~~~~~~~~~~~~~~~~~~
+clear emgValues_mean_percent emgAmp amp_meanSignal amp_meanBaseline amp_meanPost
+
+% emgValues_master_mean = PVcre_Gtacr.(secondfield).bhrLaser.emgValues_master_mean;
+
+for f = 1:size(emgValues_master_mean,1)
+    emgValues_mean_percent(f,1) = emgValues_master_mean(f,1)/emgValues_master_mean(f,1);
+    emgValues_mean_percent(f,2) = emgValues_master_mean(f,2)/emgValues_master_mean(f,1);
+    emgValues_mean_percent(f,3) = emgValues_master_mean(f,3)/emgValues_master_mean(f,1);   
+end
+
+amp_meanBaseline=mean(emgValues_mean_percent(:,1));
+amp_meanSignal=mean(emgValues_mean_percent(:,2));
+amp_meanPost=mean(emgValues_mean_percent(:,3));
+
+emgAmp(1,1)=amp_meanBaseline/amp_meanBaseline;
+emgAmp(1,2)=amp_meanSignal/amp_meanBaseline;
+emgAmp(1,3)=amp_meanPost/amp_meanBaseline;
+
+
+
+%~~~~~~~~~~~~~~~~~~~~~
+% Now boxplot for EMG Values
+% ~~~~~~~~~~~~~~~~~~~~~~
+
+% Plot Boxplot
+% Condition labels
+group = [1 2 3];
+
+% function []=plot_boxplot(group,data_array,category,min_ylim,max_ylim,condition_title)
+% Quick copy
+plot_boxplot(group,emgValues_mean_percent,'BHR & Laser',0,2,'EMG Amplitude',[]);
+
+% ~~~~~~~~~~~~~~~~~~~~~~~~~ Save to Struct
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).emgValues_master=emgValues_master;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).emgValues_master_mean=emgValues_master_mean;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).emgValues_mean_percent=emgValues_mean_percent;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_bhrLaser).emgAmp=emgAmp;
+
+
+%% SECTION 17: 
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%~~~~~~~~~       Laser Only      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+clear rasterValues rasterTimes normrasterTimes normrasterValues
+% Raster plot times & values
+% [rasterTimes, rasterValues, normrasterTimes, normrasterValues]=emgPeak_segments(laserOnly.Millisec, 1,...
+    % sampleRate,emgDurThresh,emgPhysThresh,minPeakHeight,beforePeak,afterPeak,time,smoothedEMG)
+
+laserOnly_array=laserOnly;
+thirdfield_laseronly='laserOnly';
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~ LASER LENGTH ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+col = laserOnly_array.Aligned_Laser(:);  
+if numel(unique(col)) ~= 1
+    disp('Values in the column are not all the same.');
+else
+    disp('You are good! Values in the column are all the same.');
+end
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~ LASER POWER ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% Check if the duration of the laser length is the same for all trials
+col = bhrLaser_array.Power(:);  
+if numel(unique(col)) ~= 1
+    disp('Values in the Laser Power column are not all the same.');
+else
+    disp('You are good! Values in the Laser Power column are all the same.');
+end
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+% Grab the first value of signal to use below
+signalTime_laserOnly=laserOnly_array.Aligned_Laser(1);
+
+% Create the segment of recording that will include the signal plus the
+% baseline and post-signal segments (plus a little extra)
+beforePeak_laserOnly=signalTime_laserOnly+2;
+afterPeak_laserOnly=(2*signalTime_laserOnly)+2;
+
+% Create the values for the baseline and post-signal segments 
+baseline_laserOnly= [-1 -(signalTime_laserOnly+1)];
+post_laserOnly= [signalTime_laserOnly+1 (2*signalTime_laserOnly)+1];
+
+%[rasterTimes, rasterValues, normrasterTimes, normrasterValues]=emgPeak_segments(category_field, laser_only,...
+%    sampleRate,emgDurThresh,emgPhysThresh, minPeakHeight,beforePeak,afterPeak,time,smoothedEMG) 
+[rasterTimes, rasterValues, normrasterTimes, normrasterValues]=emgPeak_segments(laserOnly_array.Millisec, 1,...
+    sampleRate,0.1,0.15,0.04,beforePeak_laserOnly,afterPeak_laserOnly,time,smoothedEMG);
+
+%~~~~~~~~~~~~~~~~~~~~~
+% Do sanity check!!!
+% ~~~~~~~~~~~~~~~~~~~~~~  
+
+for sanityCheck=1:length(rasterValues)
+    limit = 0.045;            % Defined limit of y-value for integrated, smoothed emg
+    array=rasterValues{1,sanityCheck};
+    
+    if any(array < limit)
+        disp(['Array ' num2str(sanityCheck) ' has a value below the limit']);
+    else
+        disp(['All values in array' num2str(sanityCheck) ' are above the limit.']);
+    end
+
+end
+
+% ~~~~~~~~~~~~~~~~~~~~Delete a column from all raster arrays~~~~~~~~
+% Specify the column to delete
+cellToDelete = 4; 
+columnToDelete = 42;
+
+    rasterValues{1,cellToDelete}(:, columnToDelete) = [];
+    rasterTimes{1,cellToDelete}(:, columnToDelete) = [];
+    normrasterTimes{1,cellToDelete}(:, columnToDelete) = [];
+    normrasterValues{1,cellToDelete}(:, columnToDelete) = [];
+
+% Delete a whole cell
+
+%~~~~~~~~~ currently just leaves it empty, need to edit so that it totally
+%~~~~~~~~~ deletes it 
+cellToDelete = 7; 
+
+    rasterValues{1,cellToDelete}= [];
+    rasterTimes{1,cellToDelete}= [];
+    normrasterTimes{1,cellToDelete} = [];
+    normrasterValues{1,cellToDelete} = [];
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+for sanityCheck=1:length(rasterTimes)
+    limit = 0.11;            % Defined limit time in between emg bursts
+    array=rasterTimes{1,sanityCheck};
+
+    problem=[];
+
+    for nth=2:length(array)
+        if abs (array(1,nth) - array(1,(nth-1))) < limit
+            problem = [problem,nth]; 
+        end
+    end
+    
+    if ~isempty(problem)
+        disp(['There is an absolute difference smaller than the threshold in array ' num2str(sanityCheck)]);
+        disp(['Check trials: ' num2str(problem)]);
+
+    else
+        disp(['All values in array ' num2str(sanityCheck) ' are the correct time apart.']);
+    end
+end
+
+% Use this to check air pressure and emg plot
+trial=4;
+xlim([((laserOnly_array.Millisec(trial)/sampleRate)-beforePeak_laserOnly) ((laserOnly_array.Millisec(trial)/sampleRate)+afterPeak_laserOnly)]);
+
+% Signal
+xline ((laserOnly_array.Millisec(trial)/sampleRate),'--b');
+xline ((laserOnly_array.Millisec(trial)/sampleRate)+signalTime_laserOnly,'--g');
+
+% Baseline
+xline (((laserOnly_array.Millisec(trial)/sampleRate)+(baseline_laserOnly(1))),'--r');
+xline ((laserOnly_array.Millisec(trial)/sampleRate)+(baseline_laserOnly(2)),'--r');
+
+% Post
+xline ((laserOnly_array.Millisec(trial)/sampleRate)+(post_laserOnly(1)),'--r');
+xline ((laserOnly_array.Millisec(trial)/sampleRate)+(post_laserOnly(2)),'--r');
+
+%~~~~~~~~~~~~~~~~~~~~~~~~ Save all that work!
+
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).rasterTimes=rasterTimes;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).rasterValues=rasterValues;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).normal_rasterTimes=normrasterTimes;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).normal_rasterValues=normrasterValues;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).metadata=laserOnly_array;
+
+
+%~~~~~~~~~~~~~~~~~~~~~
+% Now histogram
+% ~~~~~~~~~~~~~~~~~~~~~~
+% [histInsp, binEdges, inspMat]=rasterplot_BHR(beforePeak, afterPeak, binNum,...
+%    parameter_table, rasterTimes, title_name, subtitle_name,varSave,param_name,filename,...
+%    saveDir,makePSTH, makeHisto,secondXline)
+% 
+% Quick copy
+    % [histInsp, binEdges, inspMat]=rasterplot_BHR(beforePeak,afterPeak,16,bhrOnly.startBHR,...
+    % rasterTimes,'SSTcre Gtacr #00','BHR only',0,[],[],[],1,1,secondXline); 
+
+clear histInsp binEdges inspMat width
+    
+[histInsp, binEdges, inspMat]=rasterplot_BHR(beforePeak_laserOnly,afterPeak_laserOnly,20,laserOnly_array.Millisec,...
+rasterTimes,mouse_ID,'Laser Only',0,[],[],[],1,0,signalTime_laserOnly);
+
+%~~~~~~~~~~~~~~~~~~~~~
+% Center the Laser time around 0 so it can also be plotted
+% ~~~~~~~~~~~~~~~~~~~~~~
+zerodLaser=[];
+zerodLaser=(laserOnly_array.Millisec/sampleRate)-(laserOnly_array.Millisec/sampleRate);
+
+width=mean(laserOnly_array.Aligned_Laser(:));
+
+height = 0.2;
+
+for eachLine = 1:length(zerodLaser)
+
+    rectangle('Position', [zerodLaser(eachLine,1), eachLine - height/2, width, height], ...
+          'FaceColor', 'c', 'EdgeColor', 'none'); 
+end
+
+
+% Baseline
+xline (baseline_laserOnly(1),'--r');
+xline (baseline_laserOnly(2),'--r');
+
+% Post
+xline (post_laserOnly(1),'--r');
+xline (post_laserOnly(2),'--r');
+
+%~~~~~~~~~~~~~~~~~~~~~~~~ Save all that work!
+%thirdfield_laseronly='laserOnly';
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).histInsp=histInsp;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).binEdges=binEdges;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).inspMat=inspMat;
+
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).zeroedLaser=zerodLaser;
+
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% EMG Times : Get Baseline, Signal, & Post  - Frequency per segment
+% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+clear boxplotCells meanBaseline meanSignal meanPost
+
+% [boxplotCells,meanBaseline,meanSignal,meanPost]=boxplotValues_rastertime(raster_array, base_start, base_end,...
+%    signal_end,post_start,post_end)
+[boxplotCells,meanBaseline,meanSignal,meanPost,boxplot_numel,...
+    boxplot_std] = boxplotValues_rastertime(rasterTimes,baseline_laserOnly(2),...
+    baseline_laserOnly(1), signalTime_laserOnly, post_laserOnly(1), post_laserOnly(2));
+
+
+clear emgFreq
+
+emgFreq(1,1)=meanBaseline/meanBaseline;
+emgFreq(1,2)=meanSignal/meanBaseline;
+emgFreq(1,3)=meanPost/meanBaseline;
+
+%~~~~~~~~~~~~~~~~~~~~~
+% Now boxplot for EMG freq
+% ~~~~~~~~~~~~~~~~~~~~~~
+
+% Plot Boxplot
+% Condition labels
+group = [1 2 3];
+
+% function []=plot_boxplot(group,data_array,category,min_ylim,max_ylim,condition_title)
+% Quick copy
+plot_boxplot(group,emgFreq,'Laser Only',0,3,'EMG Frequency',[]);
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% Get Baseline, Signal, & Post - Frequency per sec
+% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+clear emgPerSec
+
+emgPerSec(1,1)=meanBaseline/signalTime_laserOnly;
+emgPerSec(1,2)=meanSignal/signalTime_laserOnly;
+emgPerSec(1,3)=meanPost/signalTime_laserOnly;
+
+
+
+%~~~~~~~~~~~~~~~~~~~~~~~~ Save all that work!
+%thirdfield_laseronly='laserOnly';
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).boxplotValues_time=boxplotCells;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).meanBaseline=meanBaseline;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).meanSignal=meanSignal;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).meanPost=meanPost;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).emgFreq=emgFreq;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).freq_boxplot_numel=boxplot_numel;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).freq_boxplot_std=boxplot_std;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).WSXX=signalTime_laserOnly;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).emgPerSec=emgPerSec;
+
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+% EMG Amplitude : Get Baseline, Signal, & Post EMG Values
+% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+% function [emgValues_master,emgValues_master_mean]=boxplotValues_rastervalues(raster_array,...
+%    boxplotCells)
+
+%clear boxplotCells
+%boxplotCells=BotC_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).boxplotValues_time;
+
+clear emgValues_master emgValues_master_mean
+[emgValues_master,emgValues_master_mean]=boxplotValues_rastervalues...
+    (rasterValues,boxplotCells);
+
+
+emgValues_master_mean=cell2mat(emgValues_master_mean);
+% Replace NaN values with 0
+emgValues_master_mean(isnan(emgValues_master_mean)) = 0;
+
+
+%~~~~~~~~~~~~~~~~~~~~~
+% EMG VALUES : Percent of baseline
+% ~~~~~~~~~~~~~~~~~~~~~~
+clear emgValues_mean_percent
+
+% emgValues_master_mean = PVcre_Gtacr.(secondfield).laserOnly.emgValues_master_mean;
+
+for f = 1:size(emgValues_master_mean,1)
+    emgValues_mean_percent(f,1) = emgValues_master_mean(f,1)/emgValues_master_mean(f,1);
+    emgValues_mean_percent(f,2) = emgValues_master_mean(f,2)/emgValues_master_mean(f,1);
+    emgValues_mean_percent(f,3) = emgValues_master_mean(f,3)/emgValues_master_mean(f,1);   
+end
+
+
+%~~~~~~~~~~~~~~~~~~~~~
+% Now boxplot for EMG Amplitude
+% ~~~~~~~~~~~~~~~~~~~~~~
+
+% Plot Boxplot
+% Condition labels
+group = [1 2 3];
+
+% function []=plot_boxplot(group,data_array,category,min_ylim,max_ylim,condition_title)
+% Quick copy
+plot_boxplot(group,emgValues_mean_percent,'Laser Only',0,3,'EMG Amplitude',[]);
+
+clear emgAmp
+
+emgAmp(1,1)=mean(emgValues_mean_percent(:,1))/mean(emgValues_mean_percent(:,1));
+emgAmp(1,2)=mean(emgValues_mean_percent(:,2))/mean(emgValues_mean_percent(:,1));
+emgAmp(1,3)=mean(emgValues_mean_percent(:,3))/mean(emgValues_mean_percent(:,1));
+
+%~~~~~~~~~~~~~~~~~~~~~~~~ Save all that work!
+%thirdfield_laseronly='laserOnly';
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).emgValues_master=emgValues_master;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).emgValues_master_mean=emgValues_master_mean;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).emgValues_mean_percent=emgValues_mean_percent;
+Vgatflp_PVcre_Gtacr.(secondfield).(thirdfield_laseronly).emgAmp=emgAmp;
+
+
+
+%% SECTION 18: Save the struct!!! and Workspace?
+% Save specific variables to a MAT file in the specified directory
+% Specify the file name
+varfilename = 'VgatFlp_PVcre_Gtacr_00_01_02_03_ctrlnum3_struct_250811.mat';
+save(fullfile(saveDir, varfilename), 'Vgatflp_PVcre_Gtacr');
+
+% Save the workspace too?
+varfilename = 'Control_VgatFlp_PVcreWT_Gtacr_num3_rec250806_workspace_250811.mat';
+save(fullfile(saveDir, varfilename));
+
